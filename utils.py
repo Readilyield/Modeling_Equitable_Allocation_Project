@@ -106,6 +106,96 @@ def baselineModel(N,M,c,o,n,lam,p1,p0,alpha,
 
 
 
+def alternativeModel(N,M,c,o,n,lam,p,alpha,
+                     beta=100,rou=1e-3,gamma=1e-5, 
+                     RW_style=1,eps=1,
+                     d_style=1,name=None,pout=False):
+    '''
+       -- int: -- 
+       N: number of locations
+       M: number of resources
+       
+       -- np.ndarray: --
+       c: logistics cost (N x 1)
+       o: in-stock resource amount (N x 1)
+       n: total demand (N x 1)
+       lam: demand incidence rate (N x 1)
+       p: location-level hospitalization prob. (N x 1)
+       
+       -- params: --
+       alpha: minimal coverage ratio
+       rou: coefficient for equity penalty
+       gamma: coefficient for logistics cost
+       
+       RW: alternative style (1 or 2 only)
+    '''
+    if name is None:
+        name = "test"
+    model = gp.Model(name)
+    if RW_style not in {1,2}:
+        print("wrong RW_style, must be 1 or 2")
+        return 0
+    
+    if d_style not in {1,2}:
+        print("wrong d_style, must be 1 or 2")
+        return 0
+    
+    if not pout:
+        model.Params.LogToConsole = 0
+    
+    y = model.addMVar(N, lb=0, vtype=GRB.INTEGER, name="assigned")
+    z = model.addMVar(N, lb=0, name="aux") # z = min{y, n-o}
+    r_term = model.addMVar((N, N), lb=0, name="r_term")
+    y_out = []
+    
+    D_coef = 2/(N*(N-1))
+
+    
+    for i in range(N):
+        model.addConstr( z[i] <= y[i], name=f"min(y,n-o)_1_{i}" )
+        model.addConstr( z[i] <= n[i]-o[i], name=f"min(y,n-o)_2_{i}" )
+        model.addConstr( (o[i] + y[i])/(n[i] * lam) >= alpha, 
+                        name=f"coverage minimal_{i}" )
+    model.addConstr( gp.quicksum(y[i] for i in range(N)) <= M, 
+                    name="resource limit" )
+    
+    
+    for i in range(N):
+        for j in range(i+1,N):
+            if d_style == 1:
+                model.addConstr( r_term[i,j] >= (o[i] + y[i])/(n[i] * lam)-(o[j] + y[j])/(n[j] * lam) )
+                model.addConstr( r_term[i,j] >= (o[j] + y[j])/(n[j] * lam)-(o[i] + y[i])/(n[i] * lam) ) 
+            elif d_style == 2:
+                model.addConstr( r_term[i,j] == ((o[i] + y[i])/(n[i] * lam)-(o[j] + y[j])/(n[j] * lam))**2 )
+    D = gp.quicksum(r_term[i,j] for i in range(N) for j in range(i+1,N))
+    
+    if RW_style == 1:
+        objective = beta*p@z - rou*D_coef*D - gamma*c@y
+    elif RW_style == 2:
+        inv_p = 1/(1-p+eps)
+        objective = beta*inv_p@z - rou*D_coef*D - gamma*c@y
+        
+    model.setObjective(objective, GRB.MAXIMIZE)
+    model.optimize()
+#     if model.status == GRB.INFEASIBLE:
+
+    
+    opm_val = model.getObjective().getValue()
+    
+    if pout:
+        print("\n---Output:---\n")
+        model.printAttr('x')
+        print(f"max obj.value is {opm_val}.\n")
+        
+    all_vars = model.getVars()
+    values = model.getAttr("X", all_vars)
+    names = model.getAttr("VarName", all_vars)
+    for name, val in zip(names, values):
+#         print(f"{name} = {val}")
+        if "assigned" in name:
+            y_out.append(val)
+    return np.array(y_out), opm_val
+
 
 
 ############################
